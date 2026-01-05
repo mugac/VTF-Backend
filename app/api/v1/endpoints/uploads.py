@@ -162,6 +162,8 @@ class UploadInfo(BaseModel):
     filename: str
     size_bytes: int
     uploaded_at: str
+    project_name: Optional[str] = None
+    os_type: Optional[str] = None
 
 
 class UploadResponse(BaseModel):
@@ -181,11 +183,14 @@ class DetectOSResponse(BaseModel):
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_memory_dump(file: UploadFile = File(...)):
+async def upload_memory_dump(
+    file: UploadFile = File(...),
+    project_name: Optional[str] = None
+):
     """
     Endpoint pro nahrání memory dumpu - pouze uloží soubor do storage.
     Vrátí analysis_id, které se použije pro další operace.
-    Po uploadu detekuje OS pomocí banners pluginu.
+    Volitelně lze zadat project_name.
     """
     file_content = await file.read()
     file_size = len(file_content)
@@ -206,7 +211,8 @@ async def upload_memory_dump(file: UploadFile = File(...)):
         "size_bytes": file_size,
         "sha256": sha256_hash,
         "uploaded_at": datetime.utcnow().isoformat(),
-        "content_type": file.content_type
+        "content_type": file.content_type,
+        "project_name": project_name or file.filename
     }
     
     metadata_path = analysis_dir / "metadata.json"
@@ -381,7 +387,9 @@ async def list_uploads():
                 analysis_id=analysis_dir.name,
                 filename=metadata.get("filename", "unknown"),
                 size_bytes=metadata.get("size_bytes", 0),
-                uploaded_at=metadata.get("uploaded_at", "")
+                uploaded_at=metadata.get("uploaded_at", ""),
+                project_name=metadata.get("project_name"),
+                os_type=metadata.get("os_type")
             ))
     
     return sorted(uploads, key=lambda x: x.uploaded_at, reverse=True)
@@ -406,6 +414,37 @@ async def get_upload_info(analysis_id: str):
         metadata = json.load(f)
     
     return metadata
+
+
+class UpdateProjectRequest(BaseModel):
+    project_name: str
+
+
+@router.patch("/uploads/{analysis_id}")
+async def update_project(analysis_id: str, request: UpdateProjectRequest):
+    """
+    Aktualizuje název projektu.
+    """
+    analysis_dir = settings.STORAGE_PATH / analysis_id
+    
+    if not analysis_dir.exists():
+        raise HTTPException(status_code=404, detail="Analysis ID not found.")
+    
+    metadata_path = analysis_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail="Metadata not found.")
+    
+    # Načteme a upravíme metadata
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    
+    metadata["project_name"] = request.project_name
+    
+    # Uložíme zpět
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    
+    return {"message": "Project name updated successfully", "project_name": request.project_name}
 
 
 @router.delete("/uploads/{analysis_id}")
