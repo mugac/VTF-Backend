@@ -289,13 +289,24 @@ async def detect_os(analysis_id: str):
         
         if result.returncode != 0:
             logger.warning(f"Banners plugin failed: {result.stderr}")
+            # I když selže, vraťíme response s chybou ale ne HTTP error
             return DetectOSResponse(
                 success=False,
-                error=f"Banners plugin failed: {result.stderr}"
+                error=f"Banners plugin vrátil chybu. Možná není správný profil nebo dump je poškozen.",
+                banners_output=[]
             )
         
         # Parse JSON output
-        output_data = json.loads(result.stdout)
+        try:
+            output_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            # Pokud není JSON, zkusíme vrátit raw output
+            logger.warning(f"Non-JSON output from banners: {result.stdout[:200]}")
+            return DetectOSResponse(
+                success=False,
+                error="Banners plugin nevrátil validní JSON",
+                banners_output=[]
+            )
         
         # Detekce OS z výstupu
         os_type = None
@@ -303,45 +314,62 @@ async def detect_os(analysis_id: str):
         architecture = None
         
         if isinstance(output_data, list) and len(output_data) > 0:
-            for row in output_data:
-                banner = row.get("Banner", "").lower()
+            # Zkombinujeme všechny bannery do jednoho stringu pro lepší detekci
+            all_banners = " ".join([row.get("Banner", "").lower() for row in output_data])
+            
+            # Detekce Windows - hledáme známé patterny
+            if any(keyword in all_banners for keyword in ["windows", "microsoft", "nt kernel"]):
+                os_type = "windows"
                 
-                if "windows" in banner:
-                    os_type = "windows"
-                    if "windows 10" in banner:
-                        kernel_version = "10"
-                    elif "windows 11" in banner:
-                        kernel_version = "11"
-                    elif "windows 7" in banner:
-                        kernel_version = "7"
-                
-                elif "linux" in banner:
-                    os_type = "linux"
-                    import re
-                    version_match = re.search(r'(\d+\.\d+\.\d+[-\w]*)', banner)
-                    if version_match:
-                        kernel_version = version_match.group(1)
-                
-                if "x64" in banner or "x86_64" in banner or "amd64" in banner:
-                    architecture = "x64"
-                elif "x86" in banner or "i386" in banner or "i686" in banner:
-                    architecture = "x86"
+                # Detekce verze Windows
+                if "windows 11" in all_banners or "10.0.22" in all_banners:
+                    kernel_version = "11"
+                elif "windows 10" in all_banners or "10.0.1" in all_banners or "10.0.2" in all_banners:
+                    kernel_version = "10"
+                elif "windows 8.1" in all_banners or "6.3" in all_banners:
+                    kernel_version = "8.1"
+                elif "windows 8" in all_banners or "6.2" in all_banners:
+                    kernel_version = "8"
+                elif "windows 7" in all_banners or "6.1" in all_banners:
+                    kernel_version = "7"
+                elif "vista" in all_banners or "6.0" in all_banners:
+                    kernel_version = "Vista"
+                elif "xp" in all_banners or "5.1" in all_banners:
+                    kernel_version = "XP"
+            
+            # Detekce Linux
+            elif any(keyword in all_banners for keyword in ["linux", "ubuntu", "debian", "centos", "rhel"]):
+                os_type = "linux"
+                import re
+                version_match = re.search(r'(\d+\.\d+\.\d+[-\w]*)', all_banners)
+                if version_match:
+                    kernel_version = version_match.group(1)
+            
+            # Detekce architektury
+            if any(keyword in all_banners for keyword in ["x64", "x86_64", "amd64"]):
+                architecture = "x64"
+            elif any(keyword in all_banners for keyword in ["x86", "i386", "i686"]):
+                architecture = "x86"
         
-        # Aktualizujeme metadata
-        metadata["os_type"] = os_type
-        metadata["kernel_version"] = kernel_version
-        metadata["architecture"] = architecture
-        metadata["os_detected"] = True if os_type else False
+        # Aktualizujeme metadata POUZE pokud byla detekce úspěšná
+        # (pokud uživatel ručně nastavil OS, nechceme ho přepsat)
+        if os_type and not metadata.get("os_type"):
+            metadata["os_type"] = os_type
+            metadata["kernel_version"] = kernel_version
+            metadata["architecture"] = architecture
+            metadata["os_detected"] = True
+            
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
         
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
-        
+        # Vrátíme výsledek detekce (i když je os_type None)
         return DetectOSResponse(
-            success=True,
+            success=True if os_type else False,
             os_type=os_type,
             kernel_version=kernel_version,
             architecture=architecture,
-            banners_output=output_data
+            banners_output=output_data,
+            error="Nepodařilo se detekovat OS z výstupu banners" if not os_type else None
         )
         
     except json.JSONDecodeError as e:
@@ -417,13 +445,14 @@ async def get_upload_info(analysis_id: str):
 
 
 class UpdateProjectRequest(BaseModel):
-    project_name: str
+    project_name: Optional[str] = None
+    os_type: Optional[str] = None
 
 
 @router.patch("/uploads/{analysis_id}")
 async def update_project(analysis_id: str, request: UpdateProjectRequest):
     """
-    Aktualizuje název projektu.
+    Aktualizuje název projektu a/nebo OS typu.
     """
     analysis_dir = settings.STORAGE_PATH / analysis_id
     
@@ -438,13 +467,17 @@ async def update_project(analysis_id: str, request: UpdateProjectRequest):
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
     
-    metadata["project_name"] = request.project_name
+    if request.project_name is not None:
+        metadata["project_name"] = request.project_name
+    
+    if request.os_type is not None:
+        metadata["os_type"] = request.os_type
     
     # Uložíme zpět
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     
-    return {"message": "Project name updated successfully", "project_name": request.project_name}
+    return {"message": "Project updated successfully", "metadata": metadata}
 
 
 @router.delete("/uploads/{analysis_id}")
