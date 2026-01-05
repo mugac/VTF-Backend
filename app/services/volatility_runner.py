@@ -10,13 +10,15 @@ from app.core.config import settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def run_volatility_analysis(dump_path: Path, plugin: str):
+def run_volatility_analysis(dump_path: Path, plugin: str, symbol_path: Path = None):
 
     analysis_id = dump_path.stem 
     output_dir = dump_path.parent
     cache_file = output_dir / f"{plugin.split('.')[-1].lower()}.json"
 
     logger.info(f"[{analysis_id}] Začíná analýza pluginem: {plugin}")
+    if symbol_path:
+        logger.info(f"[{analysis_id}] Používám custom symboly: {symbol_path}")
 
     time.sleep(10)
     
@@ -38,19 +40,33 @@ def run_volatility_analysis(dump_path: Path, plugin: str):
         command = [
             str(python_path),
             "-m", "volatility3.cli",
-            "-f", str(dump_path),
+            "-f", str(dump_path)
+        ]
+        
+        # Přidání symbol path pro Linux analysis
+        if symbol_path and symbol_path.exists():
+            command.extend(["-s", str(symbol_path.parent)])
+        
+        command.extend([
             "--output-dir", str(output_dir),
             "--renderer", "json",
             plugin
-        ]
+        ])
     else:
         command = [
             str(vol_path),
-            "-f", str(dump_path),
+            "-f", str(dump_path)
+        ]
+        
+        # Přidání symbol path pro Linux analysis
+        if symbol_path and symbol_path.exists():
+            command.extend(["-s", str(symbol_path.parent)])
+        
+        command.extend([
             "--output-dir", str(output_dir),
             "--renderer", "json",
             plugin
-        ]
+        ])
     
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)

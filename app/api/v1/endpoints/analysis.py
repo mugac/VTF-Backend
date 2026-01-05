@@ -26,14 +26,25 @@ class RunAnalysisRequest(BaseModel):
 async def run_analysis(analysis_id: str, request: RunAnalysisRequest, background_tasks: BackgroundTasks):
     """
     Endpoint pro spuštění analýzy konkrétním pluginem.
+    Pro Linux dumpy automaticky použije matching symbol file pokud existuje.
     """
     analysis_dir = settings.STORAGE_PATH / analysis_id
     
     if not analysis_dir.exists():
         raise HTTPException(status_code=404, detail="Analysis ID not found. Upload a file first.")
     
+    # Načteme metadata pro zjištění OS
+    metadata_path = analysis_dir / "metadata.json"
+    metadata = {}
+    if metadata_path.exists():
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    
+    os_type = metadata.get("os_type")
+    kernel_version = metadata.get("kernel_version")
+    
     # Najdeme memory dump soubor (první .vmem nebo .mem soubor)
-    dump_files = list(analysis_dir.glob("*.vmem")) + list(analysis_dir.glob("*.mem")) + list(analysis_dir.glob("*.raw"))
+    dump_files = list(analysis_dir.glob("*.vmem")) + list(analysis_dir.glob("*.mem")) + list(analysis_dir.glob("*.raw")) + list(analysis_dir.glob("*.lime"))
     
     if not dump_files:
         raise HTTPException(status_code=404, detail="Memory dump file not found in analysis directory.")
@@ -57,30 +68,54 @@ async def run_analysis(analysis_id: str, request: RunAnalysisRequest, background
             "plugin": request.plugin
         }
     
-    background_tasks.add_task(run_volatility_analysis, dump_path, request.plugin)
+    # Pro Linux dumpy potřebujeme symbol file
+    symbol_path = None
+    if os_type == "linux":
+        # Zkusíme najít matching symbol file v cache
+        # TODO: Match podle kernel_version nebo hash
+        # Pro teď použijeme první dostupný symbol
+        symbol_cache = settings.SYMBOLS_CACHE
+        if symbol_cache.exists():
+            symbol_files = list(symbol_cache.glob("*.json"))
+            # Odfiltrujeme metadata.json
+            symbol_files = [f for f in symbol_files if f.name != "metadata.json"]
+            if symbol_files:
+                symbol_path = symbol_files[0]  # Použijeme první dostupný
+                # TODO: V budoucnu matchovat podle kernel verze
+    
+    background_tasks.add_task(run_volatility_analysis, dump_path, request.plugin, symbol_path)
     
     return {
         "message": "Analysis started.",
         "analysis_id": analysis_id,
         "plugin": request.plugin,
-        "status": "in_progress"
+        "status": "in_progress",
+        "os_type": os_type,
+        "symbols_used": str(symbol_path) if symbol_path else None
     }
 
 @router.get("/plugins")
-async def get_available_plugins():
+async def get_available_plugins(os_type: Optional[str] = None):
     """
     Endpoint pro seznam dostupných pluginů s jejich metadaty.
+    Podporuje filtrování podle OS typu (windows/linux).
     """
-    return {
-        "plugins": [
-            {
+    plugins = []
+    for plugin in AVAILABLE_PLUGINS.values():
+        if os_type is None or os_type in plugin.supported_os:
+            plugins.append({
                 "name": plugin.name,
                 "category": plugin.category,
-                "description": plugin.description
-            }
-            for plugin in AVAILABLE_PLUGINS.values()
-        ],
-        "categories": get_all_categories()
+                "description": plugin.description,
+                "supported_os": plugin.supported_os
+            })
+    
+    categories = get_all_categories(os_type)
+    
+    return {
+        "plugins": plugins,
+        "categories": categories,
+        "filtered_by_os": os_type
     }
 
 

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import analysis, uploads
+from app.api.v1.endpoints import analysis, uploads, symbols
 
 
 app = FastAPI(
@@ -26,6 +26,7 @@ app.add_middleware(
 # Routery pro různé oblasti API
 app.include_router(uploads.router, prefix="/api/v1", tags=["Uploads"])
 app.include_router(analysis.router, prefix="/api/v1", tags=["Analysis"])
+app.include_router(symbols.router, prefix="/api/v1/symbols", tags=["Symbols"])
 
 @app.get("/")
 def read_root():
