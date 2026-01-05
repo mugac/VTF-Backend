@@ -1,9 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import analysis
+from app.api.v1.endpoints import analysis, uploads
 
 
-app = FastAPI(title="VTF - Volatility Forensics Platform")
+app = FastAPI(
+    title="VTF - Volatility Forensics Platform",
+    description="Backend API for memory forensics analysis using Volatility 3",
+    version="2.0.0"
+)
 
 origins = [
     "http://localhost",
@@ -19,7 +23,9 @@ app.add_middleware(
     allow_headers=["*"],  # Povolíme všechny hlavičky
 )
 
-app.include_router(analysis.router, prefix="/api/v1")
+# Routery pro různé oblasti API
+app.include_router(uploads.router, prefix="/api/v1", tags=["Uploads"])
+app.include_router(analysis.router, prefix="/api/v1", tags=["Analysis"])
 
 @app.get("/")
 def read_root():

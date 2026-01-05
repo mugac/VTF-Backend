@@ -20,21 +20,37 @@ def run_volatility_analysis(dump_path: Path, plugin: str):
 
     time.sleep(10)
     
-    scripts_dir = Path(sys.executable).parent
+    # Použijeme Python z konfigurace (měl by být z venv)
+    python_path = settings.PYTHON_PATH
+    
+    # Najdeme vol v Scripts adresáři venv
+    scripts_dir = python_path.parent
     vol_executable = "vol.exe" if platform.system() == "Windows" else "vol"
     vol_path = scripts_dir / vol_executable
     
+    logger.info(f"[{analysis_id}] Používám Python: {python_path}")
+    logger.info(f"[{analysis_id}] Hledám vol v: {vol_path}")
+    
     if not vol_path.exists():
         logger.error(f"[{analysis_id}] Spouštěcí skript Volatility nebyl nalezen v: {vol_path}")
-        return
-
-    command = [
-    str(vol_path),
-    "-f", str(dump_path),
-    "--output-dir", str(output_dir),
-    "--renderer", "json",
-    plugin
-    ]
+        logger.info(f"[{analysis_id}] Zkusím spustit přímo přes Python modul...")
+        # Jako fallback zkusíme spustit přímo jako Python modul
+        command = [
+            str(python_path),
+            "-m", "volatility3.cli",
+            "-f", str(dump_path),
+            "--output-dir", str(output_dir),
+            "--renderer", "json",
+            plugin
+        ]
+    else:
+        command = [
+            str(vol_path),
+            "-f", str(dump_path),
+            "--output-dir", str(output_dir),
+            "--renderer", "json",
+            plugin
+        ]
     
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
