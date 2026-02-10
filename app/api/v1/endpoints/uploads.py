@@ -5,6 +5,7 @@ from datetime import datetime
 import subprocess
 import logging
 import json
+import re
 import platform
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
@@ -14,6 +15,24 @@ from app.core.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB chunks
+
+
+def _build_vol_command(dump_path: Path, plugin: str) -> list:
+    """Build a Volatility 3 CLI command for a given plugin."""
+    python_path = settings.PYTHON_PATH
+    scripts_dir = python_path.parent
+    vol_executable = "vol.exe" if platform.system() == "Windows" else "vol"
+    vol_path = scripts_dir / vol_executable
+
+    if not vol_path.exists():
+        command = [str(python_path), "-m", "volatility3.cli", "-f", str(dump_path)]
+    else:
+        command = [str(vol_path), "-f", str(dump_path)]
+    
+    command.extend(["--renderer", "json", plugin])
+    return command
 
 
 def detect_os_from_dump(dump_path: Path) -> dict:
@@ -25,28 +44,7 @@ def detect_os_from_dump(dump_path: Path) -> dict:
     """
     logger.info(f"Detecting OS for dump: {dump_path}")
     
-    # Použijeme Python z konfigurace
-    python_path = settings.PYTHON_PATH
-    scripts_dir = python_path.parent
-    vol_executable = "vol.exe" if platform.system() == "Windows" else "vol"
-    vol_path = scripts_dir / vol_executable
-    
-    if not vol_path.exists():
-        # Fallback na Python modul
-        command = [
-            str(python_path),
-            "-m", "volatility3.cli",
-            "-f", str(dump_path),
-            "--renderer", "json",
-            "banners.Banners"
-        ]
-    else:
-        command = [
-            str(vol_path),
-            "-f", str(dump_path),
-            "--renderer", "json",
-            "banners.Banners"
-        ]
+    command = _build_vol_command(dump_path, "banners.Banners")
     
     try:
         logger.info(f"Running OS detection command: {' '.join(command)}")
@@ -54,7 +52,7 @@ def detect_os_from_dump(dump_path: Path) -> dict:
             command, 
             capture_output=True, 
             text=True, 
-            timeout=60,  # 1 minute timeout
+            timeout=60,
             check=False
         )
         
@@ -68,45 +66,9 @@ def detect_os_from_dump(dump_path: Path) -> dict:
                 "architecture": None
             }
         
-        # Parse JSON output
         try:
             output_data = json.loads(result.stdout)
-            
-            # Banners vrací pole řádků s různými informacemi
-            # Hledáme OS informace v banners
-            os_type = None
-            kernel_version = None
-            architecture = None
-            
-            if isinstance(output_data, list) and len(output_data) > 0:
-                for row in output_data:
-                    banner = row.get("Banner", "").lower()
-                    
-                    # Detekce Windows
-                    if "windows" in banner:
-                        os_type = "windows"
-                        # Pokus o extrakci verze
-                        if "windows 10" in banner:
-                            kernel_version = "10"
-                        elif "windows 11" in banner:
-                            kernel_version = "11"
-                        elif "windows 7" in banner:
-                            kernel_version = "7"
-                    
-                    # Detekce Linux
-                    elif "linux" in banner:
-                        os_type = "linux"
-                        # Pokus o extrakci kernel verze
-                        import re
-                        version_match = re.search(r'(\d+\.\d+\.\d+[-\w]*)', banner)
-                        if version_match:
-                            kernel_version = version_match.group(1)
-                    
-                    # Detekce architektury
-                    if "x64" in banner or "x86_64" in banner or "amd64" in banner:
-                        architecture = "x64"
-                    elif "x86" in banner or "i386" in banner or "i686" in banner:
-                        architecture = "x86"
+            os_type, kernel_version, architecture = _parse_banners(output_data)
             
             if os_type:
                 logger.info(f"OS detected: {os_type} {kernel_version or 'unknown version'} ({architecture or 'unknown arch'})")
@@ -157,6 +119,53 @@ def detect_os_from_dump(dump_path: Path) -> dict:
         }
 
 
+def _parse_banners(output_data) -> tuple:
+    """
+    Parse banners plugin output and return (os_type, kernel_version, architecture).
+    """
+    os_type = None
+    kernel_version = None
+    architecture = None
+
+    if not isinstance(output_data, list) or len(output_data) == 0:
+        return os_type, kernel_version, architecture
+
+    all_banners = " ".join([row.get("Banner", "").lower() for row in output_data])
+
+    # Detect Windows
+    if any(kw in all_banners for kw in ["windows", "microsoft", "nt kernel"]):
+        os_type = "windows"
+        if "windows 11" in all_banners or "10.0.22" in all_banners:
+            kernel_version = "11"
+        elif "windows 10" in all_banners or "10.0.1" in all_banners or "10.0.2" in all_banners:
+            kernel_version = "10"
+        elif "windows 8.1" in all_banners or "6.3" in all_banners:
+            kernel_version = "8.1"
+        elif "windows 8" in all_banners or "6.2" in all_banners:
+            kernel_version = "8"
+        elif "windows 7" in all_banners or "6.1" in all_banners:
+            kernel_version = "7"
+        elif "vista" in all_banners or "6.0" in all_banners:
+            kernel_version = "Vista"
+        elif "xp" in all_banners or "5.1" in all_banners:
+            kernel_version = "XP"
+
+    # Detect Linux
+    elif any(kw in all_banners for kw in ["linux", "ubuntu", "debian", "centos", "rhel"]):
+        os_type = "linux"
+        version_match = re.search(r'(\d+\.\d+\.\d+[-\w]*)', all_banners)
+        if version_match:
+            kernel_version = version_match.group(1)
+
+    # Detect architecture
+    if any(kw in all_banners for kw in ["x64", "x86_64", "amd64"]):
+        architecture = "x64"
+    elif any(kw in all_banners for kw in ["x86", "i386", "i686"]):
+        architecture = "x86"
+
+    return os_type, kernel_version, architecture
+
+
 class UploadInfo(BaseModel):
     analysis_id: str
     filename: str
@@ -188,23 +197,41 @@ async def upload_memory_dump(
     project_name: Optional[str] = None
 ):
     """
-    Endpoint pro nahrání memory dumpu - pouze uloží soubor do storage.
-    Vrátí analysis_id, které se použije pro další operace.
-    Volitelně lze zadat project_name.
+    Endpoint pro nahrání memory dumpu — streamovaný zápis po chunkcích.
+    Nepotřebuje celý soubor v RAM. SHA256 se počítá inkrementálně.
     """
-    file_content = await file.read()
-    file_size = len(file_content)
-    sha256_hash = hashlib.sha256(file_content).hexdigest()
+    # Stream file to a temp location, computing hash and size incrementally
+    temp_dir = settings.TEMP_DIR
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"upload_{file.filename}"
 
+    hasher = hashlib.sha256()
+    file_size = 0
+
+    try:
+        with open(temp_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                buffer.write(chunk)
+                hasher.update(chunk)
+                file_size += len(chunk)
+    except Exception as e:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+    sha256_hash = hasher.hexdigest()
     analysis_dir = settings.STORAGE_PATH / sha256_hash
     analysis_dir.mkdir(parents=True, exist_ok=True)
-    
+
     dump_path = analysis_dir / file.filename
 
-    # Uložíme soubor
-    with open(dump_path, "wb") as buffer:
-        buffer.write(file_content)
-    
+    # Move temp file to final location
+    import shutil
+    shutil.move(str(temp_path), str(dump_path))
+
     # Uložíme základní metadata (bez OS detekce)
     metadata = {
         "filename": file.filename,
@@ -219,7 +246,7 @@ async def upload_memory_dump(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     
-    logger.info(f"Upload completed: {sha256_hash}")
+    logger.info(f"Upload completed: {sha256_hash} ({file_size / (1024*1024):.1f} MB)")
     
     return UploadResponse(
         message="Upload successful.",
@@ -233,7 +260,7 @@ async def upload_memory_dump(
 async def detect_os(analysis_id: str):
     """
     Spustí banners plugin pro detekci OS z memory dumpu.
-    Vrátí detekované informace a kompletní výstup z banners pluginu.
+    Používá sdílenou _build_vol_command a _parse_banners logiku.
     """
     analysis_dir = settings.STORAGE_PATH / analysis_id
     
@@ -244,7 +271,6 @@ async def detect_os(analysis_id: str):
     if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="Metadata not found.")
     
-    # Najdeme memory dump soubor
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
     
@@ -254,29 +280,9 @@ async def detect_os(analysis_id: str):
     if not dump_path.exists():
         raise HTTPException(status_code=404, detail="Memory dump file not found.")
     
-    # Spustíme detekci
     logger.info(f"Running OS detection for {analysis_id}")
     
-    python_path = settings.PYTHON_PATH
-    scripts_dir = python_path.parent
-    vol_executable = "vol.exe" if platform.system() == "Windows" else "vol"
-    vol_path = scripts_dir / vol_executable
-    
-    if not vol_path.exists():
-        command = [
-            str(python_path),
-            "-m", "volatility3.cli",
-            "-f", str(dump_path),
-            "--renderer", "json",
-            "banners.Banners"
-        ]
-    else:
-        command = [
-            str(vol_path),
-            "-f", str(dump_path),
-            "--renderer", "json",
-            "banners.Banners"
-        ]
+    command = _build_vol_command(dump_path, "banners.Banners")
     
     try:
         result = subprocess.run(
@@ -289,18 +295,15 @@ async def detect_os(analysis_id: str):
         
         if result.returncode != 0:
             logger.warning(f"Banners plugin failed: {result.stderr}")
-            # I když selže, vraťíme response s chybou ale ne HTTP error
             return DetectOSResponse(
                 success=False,
-                error=f"Banners plugin vrátil chybu. Možná není správný profil nebo dump je poškozen.",
+                error="Banners plugin vrátil chybu. Možná není správný profil nebo dump je poškozen.",
                 banners_output=[]
             )
         
-        # Parse JSON output
         try:
             output_data = json.loads(result.stdout)
         except json.JSONDecodeError:
-            # Pokud není JSON, zkusíme vrátit raw output
             logger.warning(f"Non-JSON output from banners: {result.stdout[:200]}")
             return DetectOSResponse(
                 success=False,
@@ -308,51 +311,9 @@ async def detect_os(analysis_id: str):
                 banners_output=[]
             )
         
-        # Detekce OS z výstupu
-        os_type = None
-        kernel_version = None
-        architecture = None
+        os_type, kernel_version, architecture = _parse_banners(output_data)
         
-        if isinstance(output_data, list) and len(output_data) > 0:
-            # Zkombinujeme všechny bannery do jednoho stringu pro lepší detekci
-            all_banners = " ".join([row.get("Banner", "").lower() for row in output_data])
-            
-            # Detekce Windows - hledáme známé patterny
-            if any(keyword in all_banners for keyword in ["windows", "microsoft", "nt kernel"]):
-                os_type = "windows"
-                
-                # Detekce verze Windows
-                if "windows 11" in all_banners or "10.0.22" in all_banners:
-                    kernel_version = "11"
-                elif "windows 10" in all_banners or "10.0.1" in all_banners or "10.0.2" in all_banners:
-                    kernel_version = "10"
-                elif "windows 8.1" in all_banners or "6.3" in all_banners:
-                    kernel_version = "8.1"
-                elif "windows 8" in all_banners or "6.2" in all_banners:
-                    kernel_version = "8"
-                elif "windows 7" in all_banners or "6.1" in all_banners:
-                    kernel_version = "7"
-                elif "vista" in all_banners or "6.0" in all_banners:
-                    kernel_version = "Vista"
-                elif "xp" in all_banners or "5.1" in all_banners:
-                    kernel_version = "XP"
-            
-            # Detekce Linux
-            elif any(keyword in all_banners for keyword in ["linux", "ubuntu", "debian", "centos", "rhel"]):
-                os_type = "linux"
-                import re
-                version_match = re.search(r'(\d+\.\d+\.\d+[-\w]*)', all_banners)
-                if version_match:
-                    kernel_version = version_match.group(1)
-            
-            # Detekce architektury
-            if any(keyword in all_banners for keyword in ["x64", "x86_64", "amd64"]):
-                architecture = "x64"
-            elif any(keyword in all_banners for keyword in ["x86", "i386", "i686"]):
-                architecture = "x86"
-        
-        # Aktualizujeme metadata POUZE pokud byla detekce úspěšná
-        # (pokud uživatel ručně nastavil OS, nechceme ho přepsat)
+        # Update metadata if OS was detected and not manually set
         if os_type and not metadata.get("os_type"):
             metadata["os_type"] = os_type
             metadata["kernel_version"] = kernel_version
@@ -362,7 +323,6 @@ async def detect_os(analysis_id: str):
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
         
-        # Vrátíme výsledek detekce (i když je os_type None)
         return DetectOSResponse(
             success=True if os_type else False,
             os_type=os_type,
@@ -372,12 +332,6 @@ async def detect_os(analysis_id: str):
             error="Nepodařilo se detekovat OS z výstupu banners" if not os_type else None
         )
         
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse banners output: {e}")
-        return DetectOSResponse(
-            success=False,
-            error=f"Failed to parse banners output: {str(e)}"
-        )
     except subprocess.TimeoutExpired:
         logger.error("OS detection timed out")
         return DetectOSResponse(
@@ -407,7 +361,6 @@ async def list_uploads():
         
         metadata_path = analysis_dir / "metadata.json"
         if metadata_path.exists():
-            import json
             with open(metadata_path, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
             
@@ -437,7 +390,6 @@ async def get_upload_info(analysis_id: str):
     if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="Metadata not found for this upload.")
     
-    import json
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
     
@@ -491,7 +443,7 @@ async def delete_upload(analysis_id: str):
         raise HTTPException(status_code=404, detail="Analysis ID not found.")
     
     # Smažeme celou složku
-    import shutil
-    shutil.rmtree(analysis_dir)
+    import shutil as _shutil
+    _shutil.rmtree(analysis_dir)
     
     return {"message": "Upload and all analysis results deleted successfully.", "analysis_id": analysis_id}

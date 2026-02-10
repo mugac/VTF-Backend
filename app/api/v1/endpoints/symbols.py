@@ -25,8 +25,31 @@ from app.services.symbol_generator import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# In-memory job tracking (pro production by měla být databáze)
-symbol_jobs = {}
+# ─── Persistent Job Tracking ────────────────────────────────────────────
+
+JOBS_FILE = settings.SYMBOLS_CACHE / "jobs.json"
+
+
+def _load_jobs() -> dict:
+    """Load symbol jobs from persisted JSON file."""
+    if JOBS_FILE.exists():
+        try:
+            with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_jobs(jobs: dict):
+    """Persist symbol jobs to JSON file."""
+    JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(JOBS_FILE, "w", encoding="utf-8") as f:
+        json.dump(jobs, f, indent=2, ensure_ascii=False)
+
+
+# In-memory cache, synced to disk
+symbol_jobs = _load_jobs()
 
 
 class SymbolJob(BaseModel):
@@ -63,6 +86,7 @@ def background_generate_isf(
     try:
         logger.info(f"[Job {job_id}] Starting ISF generation")
         symbol_jobs[job_id]["status"] = "processing"
+        _save_jobs(symbol_jobs)
         
         # Generate ISF
         result = get_or_generate_isf(
@@ -97,6 +121,7 @@ def background_generate_isf(
         })
     
     finally:
+        _save_jobs(symbol_jobs)
         # Cleanup temporary files
         try:
             if vmlinux_path.exists():
@@ -159,6 +184,7 @@ async def upload_vmlinux(
             created_at=datetime.now().isoformat()
         )
         symbol_jobs[job_id] = job.dict()
+        _save_jobs(symbol_jobs)
         
         # Spuštění background task
         background_tasks.add_task(

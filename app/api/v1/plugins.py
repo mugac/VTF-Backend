@@ -188,23 +188,23 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         supported_os=["windows"]
     ),
     
-    # Security - Windows
-    "windows.hashdump.Hashdump": PluginInfo(
-        name="windows.hashdump.Hashdump",
+    # Security & Credentials - Windows
+    "windows.getsids.GetSIDs": PluginInfo(
+        name="windows.getsids.GetSIDs",
         category="Security",
-        description="Extracts password hashes from registry",
+        description="Lists Security Identifiers (SIDs) for each process",
         supported_os=["windows"]
     ),
-    "windows.cachedump.Cachedump": PluginInfo(
-        name="windows.cachedump.Cachedump",
+    "windows.registry.certificates.Certificates": PluginInfo(
+        name="windows.registry.certificates.Certificates",
         category="Security",
-        description="Extracts cached domain credentials",
+        description="Lists certificates stored in the registry",
         supported_os=["windows"]
     ),
-    "windows.lsadump.Lsadump": PluginInfo(
-        name="windows.lsadump.Lsadump",
+    "windows.skeleton_key_check.Skeleton_Key_Check": PluginInfo(
+        name="windows.skeleton_key_check.Skeleton_Key_Check",
         category="Security",
-        description="Extracts LSA secrets from registry",
+        description="Checks for Skeleton Key malware in LSASS",
         supported_os=["windows"]
     ),
     
@@ -257,22 +257,28 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
     ),
     
     # Network Analysis - Linux
-    "linux.netstat.NetStat": PluginInfo(
-        name="linux.netstat.NetStat",
-        category="Network Analysis",
-        description="Lists active network connections on Linux",
-        supported_os=["linux"]
-    ),
     "linux.sockstat.Sockstat": PluginInfo(
         name="linux.sockstat.Sockstat",
         category="Network Analysis",
-        description="Lists open sockets on Linux",
+        description="Lists open sockets and active network connections on Linux",
         supported_os=["linux"]
     ),
-    "linux.ifconfig.Ifconfig": PluginInfo(
-        name="linux.ifconfig.Ifconfig",
+    "linux.ip.Addr": PluginInfo(
+        name="linux.ip.Addr",
         category="Network Analysis",
-        description="Lists network interfaces and their configurations",
+        description="Lists network interface IP addresses and configurations",
+        supported_os=["linux"]
+    ),
+    "linux.ip.Link": PluginInfo(
+        name="linux.ip.Link",
+        category="Network Analysis",
+        description="Lists network interface link-layer information",
+        supported_os=["linux"]
+    ),
+    "linux.netfilter.Netfilter": PluginInfo(
+        name="linux.netfilter.Netfilter",
+        category="Network Analysis",
+        description="Lists Netfilter hooks (firewall rules and packet filtering)",
         supported_os=["linux"]
     ),
     
@@ -283,10 +289,10 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         description="Lists open files for processes on Linux",
         supported_os=["linux"]
     ),
-    "linux.mount.Mount": PluginInfo(
-        name="linux.mount.Mount",
+    "linux.mountinfo.MountInfo": PluginInfo(
+        name="linux.mountinfo.MountInfo",
         category="File System",
-        description="Lists mounted filesystems",
+        description="Lists mounted filesystems and mount details",
         supported_os=["linux"]
     ),
     "linux.lsmod.Lsmod": PluginInfo(
@@ -347,6 +353,146 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         description="Lists keyboard notifier callbacks (keylogger detection)",
         supported_os=["linux"]
     ),
+
+    # Additional Linux Plugins
+    "linux.psscan.PsScan": PluginInfo(
+        name="linux.psscan.PsScan",
+        category="Process Analysis",
+        description="Scans for process structures in memory (finds hidden/terminated processes)",
+        supported_os=["linux"]
+    ),
+    "linux.elfs.Elfs": PluginInfo(
+        name="linux.elfs.Elfs",
+        category="Process Analysis",
+        description="Lists ELF binaries loaded in process memory",
+        supported_os=["linux"]
+    ),
+    "linux.library_list.LibraryList": PluginInfo(
+        name="linux.library_list.LibraryList",
+        category="Process Analysis",
+        description="Lists shared libraries loaded by each process",
+        supported_os=["linux"]
+    ),
+    "linux.proc.Maps": PluginInfo(
+        name="linux.proc.Maps",
+        category="Process Analysis",
+        description="Lists process memory mappings (similar to /proc/pid/maps)",
+        supported_os=["linux"]
+    ),
+    "linux.capabilities.Capabilities": PluginInfo(
+        name="linux.capabilities.Capabilities",
+        category="Security",
+        description="Lists Linux capabilities for each process (privilege analysis)",
+        supported_os=["linux"]
+    ),
+    "linux.check_idt.Check_idt": PluginInfo(
+        name="linux.check_idt.Check_idt",
+        category="Malware Detection",
+        description="Checks Interrupt Descriptor Table for hooks (rootkit detection)",
+        supported_os=["linux"]
+    ),
+    "linux.hidden_modules.Hidden_modules": PluginInfo(
+        name="linux.hidden_modules.Hidden_modules",
+        category="Malware Detection",
+        description="Detects hidden kernel modules not visible via lsmod",
+        supported_os=["linux"]
+    ),
+    "linux.ptrace.Ptrace": PluginInfo(
+        name="linux.ptrace.Ptrace",
+        category="Malware Detection",
+        description="Lists processes being traced via ptrace (debugger/injection detection)",
+        supported_os=["linux"]
+    ),
+
+    # ========== Regex/Pattern Scanning ==========
+    "windows.vadregexscan.VadRegExScan": PluginInfo(
+        name="windows.vadregexscan.VadRegExScan",
+        category="Malware Detection",
+        description="Scans process memory VADs with regex patterns for suspicious strings",
+        supported_os=["windows"]
+    ),
+    "linux.vmaregexscan.VmaRegExScan": PluginInfo(
+        name="linux.vmaregexscan.VmaRegExScan",
+        category="Malware Detection",
+        description="Scans process memory VMAs with regex patterns for suspicious strings",
+        supported_os=["linux"]
+    ),
+}
+
+
+# ─── Plugin Presets ─────────────────────────────────────────────────────
+
+PLUGIN_PRESETS: Dict[str, dict] = {
+    "quick_triage": {
+        "description": "Fast initial triage — processes, network, command lines, malware indicators",
+        "plugins": [
+            "windows.psscan.PsScan",
+            "windows.cmdline.CmdLine",
+            "windows.netscan.NetScan",
+            "windows.malfind.Malfind",
+        ],
+    },
+    "full_process": {
+        "description": "Complete process analysis — all process-related plugins",
+        "plugins": [
+            "windows.psscan.PsScan",
+            "windows.pslist.PsList",
+            "windows.pstree.PsTree",
+            "windows.cmdline.CmdLine",
+            "windows.dlllist.DllList",
+            "windows.envars.Envars",
+            "windows.handles.Handles",
+            "windows.privileges.Privs",
+        ],
+    },
+    "malware_hunt": {
+        "description": "Malware hunting — injections, hidden modules, rootkit hooks",
+        "plugins": [
+            "windows.malfind.Malfind",
+            "windows.vadinfo.VadInfo",
+            "windows.ldrmodules.LdrModules",
+            "windows.ssdt.SSDT",
+            "windows.callbacks.Callbacks",
+            "windows.filescan.FileScan",
+        ],
+    },
+    "network_forensics": {
+        "description": "Network forensics — connections, sockets, related processes",
+        "plugins": [
+            "windows.netscan.NetScan",
+            "windows.netstat.NetStat",
+            "windows.psscan.PsScan",
+        ],
+    },
+    "credential_extraction": {
+        "description": "Credential & security analysis — SIDs, certificates, skeleton key",
+        "plugins": [
+            "windows.getsids.GetSIDs",
+            "windows.registry.certificates.Certificates",
+            "windows.skeleton_key_check.Skeleton_Key_Check",
+            "windows.registry.userassist.UserAssist",
+        ],
+    },
+    "linux_quick_triage": {
+        "description": "Linux quick triage — processes, network, bash history, malware",
+        "plugins": [
+            "linux.pslist.PsList",
+            "linux.bash.Bash",
+            "linux.sockstat.Sockstat",
+            "linux.malfind.Malfind",
+            "linux.check_modules.Check_modules",
+        ],
+    },
+    "linux_rootkit_hunt": {
+        "description": "Linux rootkit detection — syscalls, modules, credentials",
+        "plugins": [
+            "linux.check_syscall.Check_syscall",
+            "linux.check_modules.Check_modules",
+            "linux.check_creds.Check_creds",
+            "linux.check_afinfo.Check_afinfo",
+            "linux.malfind.Malfind",
+        ],
+    },
 }
 
 

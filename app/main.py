@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import analysis, uploads, symbols
+from app.api.v1.endpoints import analysis, uploads, symbols, ioc, annotations
 
 
 app = FastAPI(
@@ -27,6 +27,8 @@ app.add_middleware(
 app.include_router(uploads.router, prefix="/api/v1", tags=["Uploads"])
 app.include_router(analysis.router, prefix="/api/v1", tags=["Analysis"])
 app.include_router(symbols.router, prefix="/api/v1/symbols", tags=["Symbols"])
+app.include_router(ioc.router, prefix="/api/v1", tags=["IOC Scanner"])
+app.include_router(annotations.router, prefix="/api/v1", tags=["Annotations & Dashboard"])
 
 @app.get("/")
 def read_root():
