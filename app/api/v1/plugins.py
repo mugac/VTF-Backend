@@ -12,6 +12,8 @@ class PluginInfo(BaseModel):
     description: str
     supported_os: List[str]  # ["windows"], ["linux"], nebo ["windows", "linux"]
     output_format: str = "json"
+    accepts_pid: bool = False   # Plugin can be filtered by --pid
+    requires_pid: bool = False  # Plugin MUST have --pid to run
 
 
 # Seznam dostupných pluginů s metadaty
@@ -41,31 +43,36 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         name="windows.cmdline.CmdLine",
         category="Process Analysis",
         description="Extracts command line arguments for running processes",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.dlllist.DllList": PluginInfo(
         name="windows.dlllist.DllList",
         category="Process Analysis",
         description="Lists loaded DLLs for each process",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.handles.Handles": PluginInfo(
         name="windows.handles.Handles",
         category="Process Analysis",
         description="Lists open handles for processes",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.envars.Envars": PluginInfo(
         name="windows.envars.Envars",
         category="Process Analysis",
         description="Displays environment variables for processes",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.privileges.Privs": PluginInfo(
         name="windows.privileges.Privs",
         category="Process Analysis",
         description="Lists process privileges and their status",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.sessions.Sessions": PluginInfo(
         name="windows.sessions.Sessions",
@@ -121,19 +128,22 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         name="windows.malfind.Malfind",
         category="Malware Detection",
         description="Finds suspicious memory regions that may contain injected code",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.vadinfo.VadInfo": PluginInfo(
         name="windows.vadinfo.VadInfo",
         category="Malware Detection",
         description="Displays Virtual Address Descriptor (VAD) information",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.ldrmodules.LdrModules": PluginInfo(
         name="windows.ldrmodules.LdrModules",
         category="Malware Detection",
         description="Detects unlinked DLLs (hidden from module lists)",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.ssdt.SSDT": PluginInfo(
         name="windows.ssdt.SSDT",
@@ -179,13 +189,16 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         name="windows.memmap.Memmap",
         category="Memory Analysis",
         description="Displays memory map for a specific process",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True,
+        requires_pid=True
     ),
     "windows.dumpfiles.DumpFiles": PluginInfo(
         name="windows.dumpfiles.DumpFiles",
         category="Memory Analysis",
         description="Extracts memory-resident files to disk",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     
     # Security & Credentials - Windows
@@ -193,7 +206,8 @@ AVAILABLE_PLUGINS: Dict[str, PluginInfo] = {
         name="windows.getsids.GetSIDs",
         category="Security",
         description="Lists Security Identifiers (SIDs) for each process",
-        supported_os=["windows"]
+        supported_os=["windows"],
+        accepts_pid=True
     ),
     "windows.registry.certificates.Certificates": PluginInfo(
         name="windows.registry.certificates.Certificates",

@@ -25,7 +25,7 @@ def _clean_children(data):
     return data
 
 
-def _build_vol_command(dump_path: Path, plugin: str, symbol_path: Path = None) -> list:
+def _build_vol_command(dump_path: Path, plugin: str, symbol_path: Path = None, pid: int = None, extra_args: dict = None) -> list:
     """Build the Volatility 3 CLI command."""
     python_path = settings.PYTHON_PATH
     scripts_dir = python_path.parent
@@ -42,23 +42,37 @@ def _build_vol_command(dump_path: Path, plugin: str, symbol_path: Path = None) -
         command.extend(["-s", str(symbol_path.parent)])
 
     command.extend(["--renderer", "json", plugin])
+
+    # Add --pid if specified
+    if pid is not None:
+        command.extend(["--pid", str(pid)])
+
+    # Add any extra plugin-specific arguments
+    if extra_args:
+        for key, value in extra_args.items():
+            command.extend([f"--{key}", str(value)])
+
     return command
 
 
-def run_volatility_analysis(dump_path: Path, plugin: str, symbol_path: Path = None):
+def run_volatility_analysis(dump_path: Path, plugin: str, symbol_path: Path = None, pid: int = None, extra_args: dict = None):
     """
     Run a Volatility 3 plugin against a memory dump.
     Creates marker files for status tracking:
       - <plugin>.running  — while analysis is in progress
       - <plugin>.json     — on success (result data)
       - <plugin>.error    — on failure (error details)
+    When pid is specified, files are named <plugin>_pid<N>.json etc.
     """
     analysis_id = dump_path.stem
     output_dir = dump_path.parent
     plugin_short = plugin.split('.')[-1].lower()
-    cache_file = output_dir / f"{plugin_short}.json"
-    running_marker = output_dir / f"{plugin_short}.running"
-    error_file = output_dir / f"{plugin_short}.error"
+    
+    # Per-PID results get a different filename
+    suffix = f"_pid{pid}" if pid is not None else ""
+    cache_file = output_dir / f"{plugin_short}{suffix}.json"
+    running_marker = output_dir / f"{plugin_short}{suffix}.running"
+    error_file = output_dir / f"{plugin_short}{suffix}.error"
 
     logger.info(f"[{analysis_id}] Starting analysis with plugin: {plugin}")
     if symbol_path:
@@ -75,11 +89,13 @@ def run_volatility_analysis(dump_path: Path, plugin: str, symbol_path: Path = No
     if error_file.exists():
         error_file.unlink()
 
-    command = _build_vol_command(dump_path, plugin, symbol_path)
+    command = _build_vol_command(dump_path, plugin, symbol_path, pid=pid, extra_args=extra_args)
     logger.info(f"[{analysis_id}] Command: {' '.join(command)}")
 
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        # Use cwd=output_dir so plugins that write files (e.g. DumpFiles)
+        # output to the analysis directory instead of the server root.
+        result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=str(output_dir))
 
         if result.returncode == 0:
             # Parse JSON, clean __children, and save

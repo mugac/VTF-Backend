@@ -1,3 +1,11 @@
+# Volatility 3 dumped file artifacts (from DumpFiles plugin)
+file.0x*
+*.img
+*.vacb
+
+# Analysis data directory
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

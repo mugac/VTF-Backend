@@ -28,6 +28,7 @@ router = APIRouter()
 class RunAnalysisRequest(BaseModel):
     plugin: str
     force: bool = False
+    pid: Optional[int] = None  # Optional PID filter for per-process plugins
 
 
 class BatchAnalysisRequest(BaseModel):
@@ -70,10 +71,19 @@ async def run_analysis(analysis_id: str, request: RunAnalysisRequest, background
             detail=f"Invalid plugin. Available plugins: {', '.join(get_plugin_list())}"
         )
     
+    # Check PID requirements
+    plugin_info = get_plugin_info(request.plugin)
+    if plugin_info and plugin_info.requires_pid and request.pid is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Plugin {request.plugin} requires a PID. Provide 'pid' in the request."
+        )
+    
     plugin_name = request.plugin.split('.')[-1].lower()
-    result_file = analysis_dir / f"{plugin_name}.json"
-    running_marker = analysis_dir / f"{plugin_name}.running"
-    error_file = analysis_dir / f"{plugin_name}.error"
+    suffix = f"_pid{request.pid}" if request.pid is not None else ""
+    result_file = analysis_dir / f"{plugin_name}{suffix}.json"
+    running_marker = analysis_dir / f"{plugin_name}{suffix}.running"
+    error_file = analysis_dir / f"{plugin_name}{suffix}.error"
 
     # Check if plugin is currently running
     if running_marker.exists():
@@ -101,12 +111,16 @@ async def run_analysis(analysis_id: str, request: RunAnalysisRequest, background
     # Pro Linux dumpy potřebujeme symbol file
     symbol_path = _find_symbol_for_linux(os_type, kernel_version)
 
-    background_tasks.add_task(run_volatility_analysis, dump_path, request.plugin, symbol_path)
+    background_tasks.add_task(
+        run_volatility_analysis, dump_path, request.plugin, symbol_path, 
+        pid=request.pid
+    )
     
     return {
         "message": "Analysis started.",
         "analysis_id": analysis_id,
         "plugin": request.plugin,
+        "pid": request.pid,
         "status": "running",
         "os_type": os_type,
         "symbols_used": str(symbol_path) if symbol_path else None
@@ -222,7 +236,9 @@ async def get_available_plugins(os_type: Optional[str] = None):
                 "name": plugin.name,
                 "category": plugin.category,
                 "description": plugin.description,
-                "supported_os": plugin.supported_os
+                "supported_os": plugin.supported_os,
+                "accepts_pid": plugin.accepts_pid,
+                "requires_pid": plugin.requires_pid,
             })
     
     categories = get_all_categories(os_type)
@@ -254,12 +270,13 @@ async def get_available_plugins_deprecated():
     """
     return {"plugins": get_plugin_list()}
 
-def _get_plugin_status(analysis_dir: Path, plugin_name: str) -> dict:
+def _get_plugin_status(analysis_dir: Path, plugin_name: str, pid: int = None) -> dict:
     """Get the status of a single plugin, checking markers."""
     plugin_short = plugin_name.split('.')[-1].lower()
-    result_file = analysis_dir / f"{plugin_short}.json"
-    running_marker = analysis_dir / f"{plugin_short}.running"
-    error_file = analysis_dir / f"{plugin_short}.error"
+    suffix = f"_pid{pid}" if pid is not None else ""
+    result_file = analysis_dir / f"{plugin_short}{suffix}.json"
+    running_marker = analysis_dir / f"{plugin_short}{suffix}.running"
+    error_file = analysis_dir / f"{plugin_short}{suffix}.error"
 
     if result_file.exists():
         return {"status": "completed"}
@@ -285,7 +302,7 @@ def _get_plugin_status(analysis_dir: Path, plugin_name: str) -> dict:
 
 
 @router.get("/analysis/{analysis_id}/status")
-async def get_analysis_status(analysis_id: str, plugin: Optional[str] = None):
+async def get_analysis_status(analysis_id: str, plugin: Optional[str] = None, pid: Optional[int] = None):
     """
     Endpoint pro zjištění stavu analýzy.
     Stavy: not_started, running, completed, failed.
@@ -296,8 +313,8 @@ async def get_analysis_status(analysis_id: str, plugin: Optional[str] = None):
         raise HTTPException(status_code=404, detail="Analysis ID not found.")
     
     if plugin:
-        status_info = _get_plugin_status(analysis_dir, plugin)
-        return {"plugin": plugin, **status_info}
+        status_info = _get_plugin_status(analysis_dir, plugin, pid=pid)
+        return {"plugin": plugin, "pid": pid, **status_info}
     
     # Vrátíme stav všech pluginů
     statuses = {}
@@ -307,9 +324,10 @@ async def get_analysis_status(analysis_id: str, plugin: Optional[str] = None):
     return {"analysis_id": analysis_id, "plugins": statuses}
 
 @router.get("/analysis/{analysis_id}/results/{plugin}")
-async def get_analysis_results(analysis_id: str, plugin: str):
+async def get_analysis_results(analysis_id: str, plugin: str, pid: Optional[int] = None):
     """
     Endpoint pro získání výsledků dokončené analýzy pro konkrétní plugin.
+    Optional pid parameter returns per-PID results if available.
     """
     analysis_dir = settings.STORAGE_PATH / analysis_id
     
@@ -317,7 +335,8 @@ async def get_analysis_results(analysis_id: str, plugin: str):
         raise HTTPException(status_code=404, detail="Analysis ID not found.")
     
     plugin_name = plugin.split('.')[-1].lower()
-    result_file = analysis_dir / f"{plugin_name}.json"
+    suffix = f"_pid{pid}" if pid is not None else ""
+    result_file = analysis_dir / f"{plugin_name}{suffix}.json"
 
     if not result_file.exists():
         raise HTTPException(
